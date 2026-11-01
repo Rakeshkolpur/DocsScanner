@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">FileQuik Scan &amp; PDF Studio</string>
+    <string name="title_activity_main">FileQuik Scan &amp; PDF Studio</string>
+    <string name="package_name">com.filequik.scanpdf</string>
+    <string name="custom_url_scheme">com.filequik.scanpdf</string>
+</resources>
