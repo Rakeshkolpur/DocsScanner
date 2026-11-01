@@ -1,32 +1,34 @@
-# React + TypeScript + Vite
+# FileQuik — Scan & PDF Studio
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+Scan, organize and manage your documents without unnecessary complications. No login, no cloud, no tracking — everything runs on-device.
 
-Currently, two official plugins are available:
+## Features
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+- **Scan Document** — camera capture with automatic edge detection, manual corner adjustment, grayscale/B&W/enhanced modes, and a "Record & auto-scan" mode that captures each page automatically as you flip through a stack
+- **Images to PDF**, **Split**, **Merge**, **Watermark** (text/logo), **Rotate**, **Reorder**, **Extract**
 
-## React Compiler
+Everything — PDF generation, perspective correction, image enhancement — runs client-side in the browser (or in the Android app's WebView). Nothing is uploaded anywhere.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## Development
 
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+```bash
+npm install
+npm run dev
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+## Android app
+
+This repo includes a [Capacitor](https://capacitorjs.com/) wrapper under `android/` that packages the web app as a native Android app.
+
+**Get the APK:** every push to `main` triggers [.github/workflows/build-apk.yml](.github/workflows/build-apk.yml), which builds a fresh debug APK and publishes it to the repo's **[latest release](../../releases/tag/latest)**. Download `app-debug.apk` from there and install it on your phone (enable "install from unknown sources" the first time). Re-download and reinstall after future updates — same app ID, so it upgrades in place and keeps your settings.
+
+Building locally:
+
+```bash
+npm run build
+npx cap sync android
+cd android
+./gradlew assembleDebug   # or gradlew.bat on Windows
+```
+
+The APK is output to `android/app/build/outputs/apk/debug/app-debug.apk`.
