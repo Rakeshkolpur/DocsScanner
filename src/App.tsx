@@ -4,6 +4,8 @@ import { Layout } from './components/Layout'
 import { PageLoading } from './components/PageLoading'
 
 const HomePage = lazy(() => import('./pages/HomePage'))
+const ToolsPage = lazy(() => import('./pages/ToolsPage'))
+const DocumentViewPage = lazy(() => import('./pages/DocumentViewPage'))
 const ScannerPage = lazy(() => import('./pages/ScannerPage'))
 const ImagesToPdfPage = lazy(() => import('./pages/ImagesToPdfPage'))
 const SplitPage = lazy(() => import('./pages/SplitPage'))
@@ -20,6 +22,8 @@ function App() {
         <Suspense fallback={<PageLoading />}>
           <Routes>
             <Route path="/" element={<HomePage />} />
+            <Route path="/tools" element={<ToolsPage />} />
+            <Route path="/doc/:id" element={<DocumentViewPage />} />
             <Route path="/scan" element={<ScannerPage />} />
             <Route path="/images-to-pdf" element={<ImagesToPdfPage />} />
             <Route path="/split" element={<SplitPage />} />

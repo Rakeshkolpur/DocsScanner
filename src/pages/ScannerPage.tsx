@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
+import { useNavigate } from 'react-router-dom'
 import {
-  Camera,
   RefreshCw,
   Check,
   SwitchCamera,
@@ -15,6 +15,7 @@ import {
   Image as ImageIcon,
   IdCard,
   FileText,
+  Save,
 } from 'lucide-react'
 import { ToolShell, ErrorBanner } from '../components/ToolShell'
 import { CornerEditor, defaultCorners } from '../components/CornerEditor'
@@ -27,6 +28,7 @@ import { imageDataToDataUrl, dataUrlToBytes } from '../lib/imageDataUtils'
 import { imagesToPdf } from '../lib/pdfEngine'
 import { downloadBlob, bytesToBlob } from '../lib/download'
 import { stitchLongImage } from '../lib/longImage'
+import { addDocument } from '../lib/docStore'
 import { idCardGuideCorners, ID_CARD_ASPECT, ID_CARD_GUIDE_WIDTH_PCT } from '../lib/idCardGuide'
 import { composeIdCardPage } from '../lib/composeIdCard'
 import { defaultEnhanceOptions, ENHANCE_MODE_OPTIONS, type EnhanceMode, type EnhanceOptions } from '../lib/imageEnhance'
@@ -64,6 +66,7 @@ function quadSize(corners: [Point, Point, Point, Point]) {
 const ENHANCE_MODES = ENHANCE_MODE_OPTIONS
 
 export default function ScannerPage() {
+  const navigate = useNavigate()
   const camera = useCamera()
   const [step, setStep] = useState<'camera' | 'crop' | 'recording'>('camera')
   const [capture, setCapture] = useState<Capture | null>(null)
@@ -77,6 +80,7 @@ export default function ScannerPage() {
   const [error, setError] = useState<string | null>(null)
   const [isExporting, setIsExporting] = useState(false)
   const [isStitching, setIsStitching] = useState(false)
+  const [isSaving, setIsSaving] = useState(false)
   const [isDetecting, setIsDetecting] = useState(false)
   const [autoDetected, setAutoDetected] = useState<boolean | null>(null)
   const [editingPageId, setEditingPageId] = useState<number | null>(null)
@@ -265,6 +269,23 @@ export default function ScannerPage() {
     }
   }
 
+  async function handleSaveDocument() {
+    if (pages.length === 0) return
+    const defaultName = `Scan ${new Date().toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: 'numeric' })}`
+    const name = prompt('Name this document', defaultName)
+    if (name === null) return // cancelled
+    setIsSaving(true)
+    setError(null)
+    try {
+      const doc = await addDocument(name.trim() || defaultName, pages.map(({ baseDataUrl, enhance, dataUrl }) => ({ baseDataUrl, enhance, dataUrl })))
+      navigate(`/doc/${doc.id}`)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not save the document.')
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
   return (
     <ToolShell title="Scan Document" description="Capture pages with your camera, straighten and clean them up, then export a PDF — all on this device.">
       {error && <ErrorBanner message={error} />}
@@ -283,6 +304,26 @@ export default function ScannerPage() {
           {camera.status === 'unavailable' && (
             <p className="tool-hint">No camera is available on this device or browser. You can still use Images to PDF instead.</p>
           )}
+
+          <div className="scanner-camera__viewport" style={{ display: camera.status === 'ready' ? 'block' : 'none' }}>
+            <video ref={camera.videoRef} muted playsInline className="scanner-camera__video" />
+            {camera.canSwitchCamera && (
+              <button className="scanner-viewport-icon-btn scanner-viewport-icon-btn--top-right" onClick={camera.switchCamera} aria-label="Switch camera">
+                <SwitchCamera size={16} />
+              </button>
+            )}
+            {scanMode === 'id-card' && (
+              <>
+                <div
+                  className="id-card-guide"
+                  style={{ width: `${ID_CARD_GUIDE_WIDTH_PCT}%`, aspectRatio: ID_CARD_ASPECT }}
+                />
+                <div className="scanner-record-status">
+                  {idCardStage === 'front' ? 'Align the FRONT of your ID in the box' : 'Flip the card — align the BACK in the box'}
+                </div>
+              </>
+            )}
+          </div>
 
           {camera.status === 'ready' && (
             <div className="scanner-mode-tabs">
@@ -305,59 +346,40 @@ export default function ScannerPage() {
             </div>
           )}
 
-          <div className="scanner-camera__viewport" style={{ display: camera.status === 'ready' ? 'block' : 'none' }}>
-            <video ref={camera.videoRef} muted playsInline className="scanner-camera__video" />
-            {scanMode === 'id-card' && (
-              <>
-                <div
-                  className="id-card-guide"
-                  style={{ width: `${ID_CARD_GUIDE_WIDTH_PCT}%`, aspectRatio: ID_CARD_ASPECT }}
-                />
-                <div className="scanner-record-status">
-                  {idCardStage === 'front' ? 'Align the FRONT of your ID in the box' : 'Flip the card — align the BACK in the box'}
-                </div>
-              </>
-            )}
-          </div>
-
           {camera.status === 'ready' && scanMode === 'document' && (
-            <>
-              <div className="tool-actions">
-                <button className="btn btn-primary" onClick={handleCapture}>
-                  <Camera size={16} /> Capture one page
-                </button>
-                <button className="btn" onClick={handleStartRecording}>
-                  <Video size={16} /> Record &amp; auto-scan pages
-                </button>
-                {camera.canSwitchCamera && (
-                  <button className="btn" onClick={camera.switchCamera}>
-                    <SwitchCamera size={14} /> Switch camera
-                  </button>
-                )}
+            <div className="scanner-capture-bar">
+              <button className="scanner-capture-bar__side" onClick={handleStartRecording} aria-label="Record and auto-scan">
+                <Video size={18} />
+                <span>Auto</span>
+              </button>
+              <button className="scanner-capture-bar__shutter" onClick={handleCapture} aria-label="Capture page">
+                <span className="scanner-capture-bar__shutter-inner" />
+              </button>
+              <div className="scanner-capture-bar__side scanner-capture-bar__side--badge">
+                <span className="scanner-pages-badge">{pages.length}</span>
+                <span>Pages</span>
               </div>
-              <p className="tool-hint">
-                "Record &amp; auto-scan" keeps the camera on while you flip through pages one by one — each page is
-                detected, straightened and captured automatically as soon as it holds still.
-              </p>
-            </>
+            </div>
           )}
 
           {camera.status === 'ready' && scanMode === 'id-card' && (
-            <div className="tool-actions">
-              <button className="btn btn-primary" onClick={handleIdCardCapture} disabled={isProcessing}>
-                {isProcessing ? <span className="spinner" /> : <Camera size={16} />}
-                {idCardStage === 'front' ? 'Capture front' : 'Capture back'}
+            <div className="scanner-capture-bar">
+              <button
+                className="scanner-capture-bar__side"
+                onClick={handleRetakeIdFront}
+                disabled={idCardStage === 'front'}
+                aria-label="Retake front"
+              >
+                <RefreshCw size={18} />
+                <span>Retake</span>
               </button>
-              {idCardStage === 'back' && (
-                <button className="btn" onClick={handleRetakeIdFront}>
-                  <RefreshCw size={14} /> Retake front
-                </button>
-              )}
-              {camera.canSwitchCamera && (
-                <button className="btn" onClick={camera.switchCamera}>
-                  <SwitchCamera size={14} /> Switch camera
-                </button>
-              )}
+              <button className="scanner-capture-bar__shutter" onClick={handleIdCardCapture} disabled={isProcessing} aria-label="Capture">
+                {isProcessing ? <span className="spinner" /> : <span className="scanner-capture-bar__shutter-inner" />}
+              </button>
+              <div className="scanner-capture-bar__side scanner-capture-bar__side--badge">
+                <span className="scanner-pages-badge">{pages.length}</span>
+                <span>Pages</span>
+              </div>
             </div>
           )}
         </div>
@@ -515,9 +537,13 @@ export default function ScannerPage() {
               {isStitching ? <span className="spinner" /> : <ImageIcon size={14} />}
               {isStitching ? 'Stitching…' : 'Long image'}
             </button>
-            <button className="btn btn-primary" onClick={handleExport} disabled={isExporting}>
+            <button className="btn" onClick={handleExport} disabled={isExporting}>
               {isExporting ? <span className="spinner" /> : <Download size={16} />}
               {isExporting ? 'Building PDF…' : 'Export PDF'}
+            </button>
+            <button className="btn btn-primary" onClick={handleSaveDocument} disabled={isSaving}>
+              {isSaving ? <span className="spinner" /> : <Save size={16} />}
+              {isSaving ? 'Saving…' : 'Save to My Documents'}
             </button>
           </div>
         </div>

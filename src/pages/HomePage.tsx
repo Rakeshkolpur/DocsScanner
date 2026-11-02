@@ -1,64 +1,74 @@
+import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import {
-  ScanLine,
-  Images,
-  Scissors,
-  Combine,
-  Stamp,
-  RotateCw,
-  ListOrdered,
-  FileOutput,
-} from 'lucide-react'
+import { ScanLine, FileText, Trash2 } from 'lucide-react'
+import { listDocuments, deleteDocument, type StoredDocument } from '../lib/docStore'
 import './HomePage.css'
 
-const primaryActions = [
-  { to: '/scan', icon: ScanLine, title: 'Scan Document', desc: 'Capture with your camera and export a clean PDF.' },
-  { to: '/images-to-pdf', icon: Images, title: 'Images to PDF', desc: 'Turn photos or screenshots into a PDF.' },
-]
-
-const secondaryTools = [
-  { to: '/split', icon: Scissors, title: 'Split PDF', desc: 'Break a PDF into pages or custom ranges.' },
-  { to: '/merge', icon: Combine, title: 'Merge PDF', desc: 'Combine multiple PDFs into one file.' },
-  { to: '/watermark', icon: Stamp, title: 'Add Watermark', desc: 'Stamp your own text or logo — nothing forced.' },
-  { to: '/rotate', icon: RotateCw, title: 'Rotate Pages', desc: 'Fix sideways or upside-down pages.' },
-  { to: '/reorder', icon: ListOrdered, title: 'Reorder Pages', desc: 'Drag pages into the right order, or delete some.' },
-  { to: '/extract', icon: FileOutput, title: 'Extract Pages', desc: 'Pull out the pages you need.' },
-]
+function formatDate(ts: number): string {
+  return new Date(ts).toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: 'numeric' })
+}
 
 export default function HomePage() {
+  const [docs, setDocs] = useState<StoredDocument[] | null>(null)
+
+  useEffect(() => {
+    refresh()
+  }, [])
+
+  function refresh() {
+    listDocuments().then(setDocs)
+  }
+
+  async function handleDelete(e: React.MouseEvent, id: string) {
+    e.preventDefault()
+    e.stopPropagation()
+    if (!confirm('Delete this document? This cannot be undone.')) return
+    await deleteDocument(id)
+    refresh()
+  }
+
   return (
-    <div className="container home">
-      <section className="home__hero">
-        <h1>Documents, simplified.</h1>
-        <p>Scan, organize and manage your documents without unnecessary complications.</p>
-      </section>
+    <div className="container docs-page">
+      <div className="docs-page__header">
+        <h1>My Documents</h1>
+        {docs && docs.length > 0 && (
+          <span className="docs-page__count">{docs.length} doc{docs.length === 1 ? '' : 's'}</span>
+        )}
+      </div>
 
-      <section className="home__primary">
-        {primaryActions.map(({ to, icon: Icon, title, desc }) => (
-          <Link key={to} to={to} className="home__primary-card">
-            <Icon size={26} strokeWidth={1.75} />
-            <div>
-              <h2>{title}</h2>
-              <p>{desc}</p>
-            </div>
+      {docs === null && <p className="tool-hint">Loading…</p>}
+
+      {docs !== null && docs.length === 0 && (
+        <div className="docs-page__empty">
+          <FileText size={36} strokeWidth={1.25} />
+          <h2>No documents yet</h2>
+          <p>Scan your first document — it'll show up here.</p>
+          <Link to="/scan" className="btn btn-primary">
+            <ScanLine size={16} /> Scan a document
           </Link>
-        ))}
-      </section>
+        </div>
+      )}
 
-      <section className="home__secondary">
-        <h3 className="home__section-title">PDF Tools</h3>
-        <div className="home__grid">
-          {secondaryTools.map(({ to, icon: Icon, title, desc }) => (
-            <Link key={to} to={to} className="home__tool-card">
-              <Icon size={20} strokeWidth={1.75} />
-              <div>
-                <h4>{title}</h4>
-                <p>{desc}</p>
+      {docs !== null && docs.length > 0 && (
+        <div className="docs-page__list">
+          {docs.map((doc) => (
+            <Link to={`/doc/${doc.id}`} key={doc.id} className="docs-page__item">
+              <div className="docs-page__thumb">
+                {doc.pages[0] && <img src={doc.pages[0].dataUrl} alt="" />}
               </div>
+              <div className="docs-page__meta">
+                <span className="docs-page__name">{doc.name}</span>
+                <span className="docs-page__sub">
+                  {doc.pages.length} page{doc.pages.length === 1 ? '' : 's'} · {formatDate(doc.updatedAt)}
+                </span>
+              </div>
+              <button className="docs-page__delete" onClick={(e) => handleDelete(e, doc.id)} aria-label="Delete document">
+                <Trash2 size={16} />
+              </button>
             </Link>
           ))}
         </div>
-      </section>
+      )}
     </div>
   )
 }
