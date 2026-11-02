@@ -22,10 +22,16 @@ function quadSize(corners: [Point, Point, Point, Point]) {
   return { width: Math.max(width, 50), height: Math.max(height, 50) }
 }
 
+export interface AutoScanCapture {
+  baseDataUrl: string
+  enhance: EnhanceOptions
+  dataUrl: string
+}
+
 interface Options {
   camera: ReturnType<typeof useCamera>
   enhance: EnhanceOptions
-  onCapture: (dataUrl: string) => void
+  onCapture: (capture: AutoScanCapture) => void
 }
 
 /**
@@ -37,20 +43,35 @@ export function useAutoScanSession({ camera, enhance, onCapture }: Options) {
   const [isRunning, setIsRunning] = useState(false)
   const [status, setStatus] = useState<AutoScanStatus>('looking')
   const [capturedCount, setCapturedCount] = useState(0)
+  const [liveCorners, setLiveCorners] = useState<[Point, Point, Point, Point] | null>(null)
+  const [liveFrameSize, setLiveFrameSize] = useState<{ width: number; height: number } | null>(null)
 
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const lastCapturedFrameRef = useRef<SmallFrame | null>(null)
   const previousTickFrameRef = useRef<SmallFrame | null>(null)
   const stableStreakRef = useRef(0)
   const isCapturingRef = useRef(false)
+  const isDetectingPreviewRef = useRef(false)
   const enhanceRef = useRef(enhance)
   enhanceRef.current = enhance
 
   const tick = useCallback(async () => {
     if (isCapturingRef.current) return
-    const small = camera.captureSmall(160)
+    const small = camera.captureSmall(220)
     if (!small) return
-    const frame = toSmallFrame(small, 160)
+    const frame = toSmallFrame(small, 220)
+
+    // Live edge outline for the viewfinder — runs in the worker, best-effort and
+    // non-blocking, so a slow detection never delays the capture decision below.
+    if (!isDetectingPreviewRef.current) {
+      isDetectingPreviewRef.current = true
+      setLiveFrameSize({ width: small.width, height: small.height })
+      detectCorners(small)
+        .then((corners) => setLiveCorners(corners))
+        .finally(() => {
+          isDetectingPreviewRef.current = false
+        })
+    }
 
     const sharpness = sharpnessScore(frame)
     if (sharpness < SHARPNESS_MIN) {
@@ -91,8 +112,12 @@ export function useAutoScanSession({ camera, enhance, onCapture }: Options) {
       if (!full) return
       const corners = (await detectCorners(full.imageData)) ?? defaultCorners(full.imageData.width, full.imageData.height)
       const { width, height } = quadSize(corners)
-      const processed = await processScan(full.imageData, corners, width, height, 0, enhanceRef.current)
-      onCapture(imageDataToDataUrl(processed))
+      const { base, enhanced } = await processScan(full.imageData, corners, width, height, 0, enhanceRef.current)
+      onCapture({
+        baseDataUrl: imageDataToDataUrl(base),
+        enhance: enhanceRef.current,
+        dataUrl: imageDataToDataUrl(enhanced),
+      })
       lastCapturedFrameRef.current = frame
       setCapturedCount((c) => c + 1)
       setStatus('captured')
@@ -106,13 +131,16 @@ export function useAutoScanSession({ camera, enhance, onCapture }: Options) {
     previousTickFrameRef.current = null
     stableStreakRef.current = 0
     isCapturingRef.current = false
+    isDetectingPreviewRef.current = false
     setCapturedCount(0)
     setStatus('looking')
+    setLiveCorners(null)
     setIsRunning(true)
   }, [])
 
   const stop = useCallback(() => {
     setIsRunning(false)
+    setLiveCorners(null)
   }, [])
 
   // `camera` is a fresh object every render (useCamera doesn't memoize its return value),
@@ -135,5 +163,5 @@ export function useAutoScanSession({ camera, enhance, onCapture }: Options) {
     }
   }, [isRunning])
 
-  return { isRunning, status, capturedCount, start, stop }
+  return { isRunning, status, capturedCount, liveCorners, liveFrameSize, start, stop }
 }

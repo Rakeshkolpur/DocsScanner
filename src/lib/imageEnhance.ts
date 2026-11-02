@@ -14,6 +14,13 @@ export const defaultEnhanceOptions: EnhanceOptions = {
   bwThreshold: 150,
 }
 
+export const ENHANCE_MODE_OPTIONS: { value: EnhanceMode; label: string }[] = [
+  { value: 'original', label: 'Original' },
+  { value: 'photo', label: 'Enhanced' },
+  { value: 'grayscale', label: 'Grayscale' },
+  { value: 'blackwhite', label: 'Black & white' },
+]
+
 /** Mutates pixel data in place: brightness/contrast, then grayscale/B&W/shadow-reduction as selected. */
 export function applyEnhancements(data: Uint8ClampedArray, options: EnhanceOptions) {
   const contrastFactor = (259 * (options.contrast + 255)) / (255 * (259 - options.contrast))

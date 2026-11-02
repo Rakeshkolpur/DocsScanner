@@ -7,9 +7,14 @@ import type {
   ScanProcessResponse,
 } from '../workers/scanProcessor.worker'
 
+export interface ProcessScanResult {
+  base: ImageData
+  enhanced: ImageData
+}
+
 let worker: Worker | null = null
 let nextId = 1
-const pendingProcess = new Map<number, (data: ImageData) => void>()
+const pendingProcess = new Map<number, (data: ProcessScanResult) => void>()
 const pendingDetect = new Map<number, (corners: [Point, Point, Point, Point] | null) => void>()
 
 function getWorker(): Worker {
@@ -27,7 +32,7 @@ function getWorker(): Worker {
       }
       const resolve = pendingProcess.get(data.id)
       if (resolve) {
-        resolve(data.imageData)
+        resolve({ base: data.baseImageData, enhanced: data.enhancedImageData })
         pendingProcess.delete(data.id)
       }
     }
@@ -35,6 +40,7 @@ function getWorker(): Worker {
   return worker
 }
 
+/** Warps + rotates + enhances a captured frame. Returns both the plain corrected scan and the enhanced preview. */
 export function processScan(
   imageData: ImageData,
   corners: [Point, Point, Point, Point],
@@ -42,7 +48,7 @@ export function processScan(
   destHeight: number,
   rotationDeg: number,
   enhance: EnhanceOptions,
-): Promise<ImageData> {
+): Promise<ProcessScanResult> {
   return new Promise((resolve) => {
     const id = nextId++
     pendingProcess.set(id, resolve)

@@ -17,7 +17,10 @@ export interface ScanProcessRequest {
 export interface ScanProcessResponse {
   kind: 'process'
   id: number
-  imageData: ImageData
+  /** Warped + rotated, before any enhancement filter — the non-destructive base for later re-editing. */
+  baseImageData: ImageData
+  /** `baseImageData` with the requested enhancement applied — what gets shown/exported immediately. */
+  enhancedImageData: ImageData
 }
 
 export interface ScanDetectRequest {
@@ -45,13 +48,14 @@ self.onmessage = (event: MessageEvent<ScanRequest>) => {
   }
 
   const { id, imageData, corners, destWidth, destHeight, rotationDeg, enhance } = request
-  let warped = warpPerspective(imageData, corners, destWidth, destHeight)
-  warped = rotateImageData(warped, rotationDeg)
-  applyEnhancements(warped.data, enhance)
+  let base = warpPerspective(imageData, corners, destWidth, destHeight)
+  base = rotateImageData(base, rotationDeg)
+  const enhanced = new ImageData(new Uint8ClampedArray(base.data), base.width, base.height)
+  applyEnhancements(enhanced.data, enhance)
 
-  const response: ScanProcessResponse = { kind: 'process', id, imageData: warped }
-  // ImageData's underlying buffer is transferable.
-  ;(self as unknown as Worker).postMessage(response, [warped.data.buffer])
+  const response: ScanProcessResponse = { kind: 'process', id, baseImageData: base, enhancedImageData: enhanced }
+  // ImageData's underlying buffers are transferable.
+  ;(self as unknown as Worker).postMessage(response, [base.data.buffer, enhanced.data.buffer])
 }
 
 function rotateImageData(src: ImageData, degreesCW: number): ImageData {

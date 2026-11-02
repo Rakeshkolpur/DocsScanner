@@ -12,16 +12,24 @@ import {
   Scan,
   Video,
   Square,
+  Image as ImageIcon,
+  IdCard,
+  FileText,
 } from 'lucide-react'
 import { ToolShell, ErrorBanner } from '../components/ToolShell'
 import { CornerEditor, defaultCorners } from '../components/CornerEditor'
+import { LiveOutline } from '../components/LiveOutline'
+import { PageEditorModal } from '../components/PageEditorModal'
 import { useCamera } from '../lib/useCamera'
 import { useAutoScanSession, type AutoScanStatus } from '../lib/useAutoScanSession'
 import { processScan, detectCorners } from '../lib/scanProcessorClient'
 import { imageDataToDataUrl, dataUrlToBytes } from '../lib/imageDataUtils'
 import { imagesToPdf } from '../lib/pdfEngine'
 import { downloadBlob, bytesToBlob } from '../lib/download'
-import { defaultEnhanceOptions, type EnhanceMode, type EnhanceOptions } from '../lib/imageEnhance'
+import { stitchLongImage } from '../lib/longImage'
+import { idCardGuideCorners, ID_CARD_ASPECT, ID_CARD_GUIDE_WIDTH_PCT } from '../lib/idCardGuide'
+import { composeIdCardPage } from '../lib/composeIdCard'
+import { defaultEnhanceOptions, ENHANCE_MODE_OPTIONS, type EnhanceMode, type EnhanceOptions } from '../lib/imageEnhance'
 import type { Point } from '../lib/homography'
 import '../components/ToolShell.css'
 import './ScannerPage.css'
@@ -41,6 +49,8 @@ interface Capture {
 
 interface ScanPage {
   id: number
+  baseDataUrl: string
+  enhance: EnhanceOptions
   dataUrl: string
 }
 
@@ -51,12 +61,7 @@ function quadSize(corners: [Point, Point, Point, Point]) {
   return { width: Math.max(width, 50), height: Math.max(height, 50) }
 }
 
-const ENHANCE_MODES: { value: EnhanceMode; label: string }[] = [
-  { value: 'original', label: 'Original' },
-  { value: 'photo', label: 'Enhanced' },
-  { value: 'grayscale', label: 'Grayscale' },
-  { value: 'blackwhite', label: 'Black & white' },
-]
+const ENHANCE_MODES = ENHANCE_MODE_OPTIONS
 
 export default function ScannerPage() {
   const camera = useCamera()
@@ -66,17 +71,23 @@ export default function ScannerPage() {
   const [enhance, setEnhance] = useState<EnhanceOptions>(defaultEnhanceOptions)
   const [recordEnhance, setRecordEnhance] = useState<EnhanceOptions>(defaultEnhanceOptions)
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
+  const [previewBaseUrl, setPreviewBaseUrl] = useState<string | null>(null)
   const [isProcessing, setIsProcessing] = useState(false)
   const [pages, setPages] = useState<ScanPage[]>([])
   const [error, setError] = useState<string | null>(null)
   const [isExporting, setIsExporting] = useState(false)
+  const [isStitching, setIsStitching] = useState(false)
   const [isDetecting, setIsDetecting] = useState(false)
   const [autoDetected, setAutoDetected] = useState<boolean | null>(null)
+  const [editingPageId, setEditingPageId] = useState<number | null>(null)
+  const [scanMode, setScanMode] = useState<'document' | 'id-card'>('document')
+  const [idCardStage, setIdCardStage] = useState<'front' | 'back'>('front')
+  const [idFrontDataUrl, setIdFrontDataUrl] = useState<string | null>(null)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const captureTokenRef = useRef(0)
 
-  const handleAutoCapture = useCallback((dataUrl: string) => {
-    setPages((prev) => [...prev, { id: Date.now() + Math.random(), dataUrl }])
+  const handleAutoCapture = useCallback((capture: { baseDataUrl: string; enhance: EnhanceOptions; dataUrl: string }) => {
+    setPages((prev) => [...prev, { id: Date.now() + Math.random(), ...capture }])
   }, [])
 
   const autoScan = useAutoScanSession({ camera, enhance: recordEnhance, onCapture: handleAutoCapture })
@@ -104,8 +115,9 @@ export default function ScannerPage() {
       setIsProcessing(true)
       try {
         const { width, height } = quadSize(corners)
-        const result = await processScan(capture.imageData, corners, width, height, 0, enhance)
-        setPreviewUrl(imageDataToDataUrl(result))
+        const { base, enhanced } = await processScan(capture.imageData, corners, width, height, 0, enhance)
+        setPreviewBaseUrl(imageDataToDataUrl(base))
+        setPreviewUrl(imageDataToDataUrl(enhanced))
       } finally {
         setIsProcessing(false)
       }
@@ -132,6 +144,46 @@ export default function ScannerPage() {
     runDetection(result.imageData)
   }
 
+  const ID_CARD_ENHANCE: EnhanceOptions = { mode: 'original', brightness: 0, contrast: 0, bwThreshold: 150 }
+
+  async function handleIdCardCapture() {
+    const result = camera.capture()
+    if (!result) {
+      setError('Could not capture from the camera. Try again.')
+      return
+    }
+    setError(null)
+    setIsProcessing(true)
+    try {
+      const guideCorners = idCardGuideCorners(result.imageData.width, result.imageData.height)
+      const { width, height } = quadSize(guideCorners)
+      const { enhanced } = await processScan(result.imageData, guideCorners, width, height, 0, ID_CARD_ENHANCE)
+      const dataUrl = imageDataToDataUrl(enhanced)
+
+      if (idCardStage === 'front') {
+        setIdFrontDataUrl(dataUrl)
+        setIdCardStage('back')
+        return
+      }
+
+      if (idFrontDataUrl) {
+        const composed = await composeIdCardPage(idFrontDataUrl, dataUrl)
+        setPages((prev) => [...prev, { id: Date.now(), baseDataUrl: composed, enhance: ID_CARD_ENHANCE, dataUrl: composed }])
+      }
+      setIdCardStage('front')
+      setIdFrontDataUrl(null)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not process the ID card.')
+    } finally {
+      setIsProcessing(false)
+    }
+  }
+
+  function handleRetakeIdFront() {
+    setIdCardStage('front')
+    setIdFrontDataUrl(null)
+  }
+
   function runDetection(imageData: ImageData) {
     const token = ++captureTokenRef.current
     setIsDetecting(true)
@@ -155,18 +207,23 @@ export default function ScannerPage() {
     setCapture(null)
     setCorners(null)
     setPreviewUrl(null)
+    setPreviewBaseUrl(null)
     setAutoDetected(null)
     setStep('camera')
   }
 
   function handleAddPage() {
-    if (!previewUrl) return
-    setPages((prev) => [...prev, { id: Date.now(), dataUrl: previewUrl }])
+    if (!previewUrl || !previewBaseUrl) return
+    setPages((prev) => [...prev, { id: Date.now(), baseDataUrl: previewBaseUrl, enhance, dataUrl: previewUrl }])
     handleRetake()
   }
 
   function deletePage(id: number) {
     setPages((prev) => prev.filter((p) => p.id !== id))
+  }
+
+  function updatePage(id: number, next: { baseDataUrl: string; enhance: EnhanceOptions; dataUrl: string }) {
+    setPages((prev) => prev.map((p) => (p.id === id ? { ...p, ...next } : p)))
   }
 
   function movePage(index: number, dir: -1 | 1) {
@@ -194,6 +251,20 @@ export default function ScannerPage() {
     }
   }
 
+  async function handleExportLongImage() {
+    if (pages.length === 0) return
+    setIsStitching(true)
+    setError(null)
+    try {
+      const blob = await stitchLongImage(pages.map((p) => p.dataUrl))
+      downloadBlob(blob, 'scanned-long-image.jpg')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not build the long image.')
+    } finally {
+      setIsStitching(false)
+    }
+  }
+
   return (
     <ToolShell title="Scan Document" description="Capture pages with your camera, straighten and clean them up, then export a PDF — all on this device.">
       {error && <ErrorBanner message={error} />}
@@ -213,11 +284,43 @@ export default function ScannerPage() {
             <p className="tool-hint">No camera is available on this device or browser. You can still use Images to PDF instead.</p>
           )}
 
+          {camera.status === 'ready' && (
+            <div className="scanner-mode-tabs">
+              <button
+                className={`scanner-mode-tab${scanMode === 'document' ? ' scanner-mode-tab--active' : ''}`}
+                onClick={() => setScanMode('document')}
+              >
+                <FileText size={14} /> Document
+              </button>
+              <button
+                className={`scanner-mode-tab${scanMode === 'id-card' ? ' scanner-mode-tab--active' : ''}`}
+                onClick={() => {
+                  setScanMode('id-card')
+                  setIdCardStage('front')
+                  setIdFrontDataUrl(null)
+                }}
+              >
+                <IdCard size={14} /> ID Card
+              </button>
+            </div>
+          )}
+
           <div className="scanner-camera__viewport" style={{ display: camera.status === 'ready' ? 'block' : 'none' }}>
             <video ref={camera.videoRef} muted playsInline className="scanner-camera__video" />
+            {scanMode === 'id-card' && (
+              <>
+                <div
+                  className="id-card-guide"
+                  style={{ width: `${ID_CARD_GUIDE_WIDTH_PCT}%`, aspectRatio: ID_CARD_ASPECT }}
+                />
+                <div className="scanner-record-status">
+                  {idCardStage === 'front' ? 'Align the FRONT of your ID in the box' : 'Flip the card — align the BACK in the box'}
+                </div>
+              </>
+            )}
           </div>
 
-          {camera.status === 'ready' && (
+          {camera.status === 'ready' && scanMode === 'document' && (
             <>
               <div className="tool-actions">
                 <button className="btn btn-primary" onClick={handleCapture}>
@@ -238,6 +341,25 @@ export default function ScannerPage() {
               </p>
             </>
           )}
+
+          {camera.status === 'ready' && scanMode === 'id-card' && (
+            <div className="tool-actions">
+              <button className="btn btn-primary" onClick={handleIdCardCapture} disabled={isProcessing}>
+                {isProcessing ? <span className="spinner" /> : <Camera size={16} />}
+                {idCardStage === 'front' ? 'Capture front' : 'Capture back'}
+              </button>
+              {idCardStage === 'back' && (
+                <button className="btn" onClick={handleRetakeIdFront}>
+                  <RefreshCw size={14} /> Retake front
+                </button>
+              )}
+              {camera.canSwitchCamera && (
+                <button className="btn" onClick={camera.switchCamera}>
+                  <SwitchCamera size={14} /> Switch camera
+                </button>
+              )}
+            </div>
+          )}
         </div>
       )}
 
@@ -245,6 +367,11 @@ export default function ScannerPage() {
         <div className="scanner-camera">
           <div className="scanner-camera__viewport scanner-camera__viewport--recording">
             <video ref={camera.videoRef} muted playsInline className="scanner-camera__video" />
+            <LiveOutline
+              corners={autoScan.liveCorners}
+              frameSize={autoScan.liveFrameSize}
+              locked={autoScan.status === 'stabilizing' || autoScan.status === 'capturing'}
+            />
             <div className="scanner-record-badge">
               <span className="scanner-record-dot" /> REC
             </div>
@@ -357,11 +484,13 @@ export default function ScannerPage() {
 
       {pages.length > 0 && (
         <div className="scanner-pages">
-          <p className="tool-hint">{pages.length} page{pages.length === 1 ? '' : 's'} captured</p>
+          <p className="tool-hint">{pages.length} page{pages.length === 1 ? '' : 's'} captured — tap a page to edit it</p>
           <div className="scanner-pages__strip">
             {pages.map((page, index) => (
               <div className="scanner-pages__item" key={page.id}>
-                <img src={page.dataUrl} alt={`Scanned page ${index + 1}`} />
+                <button className="scanner-pages__thumb-btn" onClick={() => setEditingPageId(page.id)} aria-label={`Edit page ${index + 1}`}>
+                  <img src={page.dataUrl} alt={`Scanned page ${index + 1}`} />
+                </button>
                 <div className="scanner-pages__item-actions">
                   <button onClick={() => movePage(index, -1)} disabled={index === 0} aria-label="Move earlier">
                     <ChevronUp size={12} />
@@ -382,6 +511,10 @@ export default function ScannerPage() {
                 <Plus size={14} /> Add another page
               </button>
             )}
+            <button className="btn" onClick={handleExportLongImage} disabled={isStitching}>
+              {isStitching ? <span className="spinner" /> : <ImageIcon size={14} />}
+              {isStitching ? 'Stitching…' : 'Long image'}
+            </button>
             <button className="btn btn-primary" onClick={handleExport} disabled={isExporting}>
               {isExporting ? <span className="spinner" /> : <Download size={16} />}
               {isExporting ? 'Building PDF…' : 'Export PDF'}
@@ -389,6 +522,21 @@ export default function ScannerPage() {
           </div>
         </div>
       )}
+
+      {editingPageId !== null && (() => {
+        const index = pages.findIndex((p) => p.id === editingPageId)
+        const page = pages[index]
+        if (!page) return null
+        return (
+          <PageEditorModal
+            page={page}
+            pageLabel={`Page ${index + 1}`}
+            onClose={() => setEditingPageId(null)}
+            onSave={(next) => updatePage(page.id, next)}
+            onDelete={() => deletePage(page.id)}
+          />
+        )
+      })()}
     </ToolShell>
   )
 }
