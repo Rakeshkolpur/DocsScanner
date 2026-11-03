@@ -9,6 +9,8 @@ export function useCamera() {
   const [status, setStatus] = useState<CameraStatus>('idle')
   const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment')
   const [canSwitchCamera, setCanSwitchCamera] = useState(false)
+  const [canToggleTorch, setCanToggleTorch] = useState(false)
+  const [torchOn, setTorchOn] = useState(false)
 
   const stop = useCallback(() => {
     streamRef.current?.getTracks().forEach((track) => track.stop())
@@ -34,6 +36,11 @@ export function useCamera() {
       }
       setFacingMode(mode)
       setStatus('ready')
+      setTorchOn(false)
+
+      const track = stream.getVideoTracks()[0]
+      const capabilities = track?.getCapabilities?.() as (MediaTrackCapabilities & { torch?: boolean }) | undefined
+      setCanToggleTorch(Boolean(capabilities?.torch))
 
       const devices = await navigator.mediaDevices.enumerateDevices()
       setCanSwitchCamera(devices.filter((d) => d.kind === 'videoinput').length > 1)
@@ -46,6 +53,18 @@ export function useCamera() {
   const switchCamera = useCallback(() => {
     start(facingMode === 'environment' ? 'user' : 'environment')
   }, [facingMode, start])
+
+  const toggleTorch = useCallback(async () => {
+    const track = streamRef.current?.getVideoTracks()[0]
+    if (!track) return
+    try {
+      const next = !torchOn
+      await track.applyConstraints({ advanced: [{ torch: next } as MediaTrackConstraintSet] })
+      setTorchOn(next)
+    } catch {
+      // Torch control isn't supported on this device/browser — leave state unchanged.
+    }
+  }, [torchOn])
 
   const capture = useCallback((): { imageData: ImageData; dataUrl: string } | null => {
     const video = videoRef.current
@@ -77,5 +96,18 @@ export function useCamera() {
 
   useEffect(() => stop, [stop])
 
-  return { videoRef, status, start, stop, switchCamera, canSwitchCamera, capture, captureSmall, facingMode }
+  return {
+    videoRef,
+    status,
+    start,
+    stop,
+    switchCamera,
+    canSwitchCamera,
+    capture,
+    captureSmall,
+    facingMode,
+    toggleTorch,
+    canToggleTorch,
+    torchOn,
+  }
 }

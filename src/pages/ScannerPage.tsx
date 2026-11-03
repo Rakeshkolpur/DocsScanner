@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState, useCallback } from 'react'
+import { useEffect, useRef, useState, useCallback, type ChangeEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
+  X,
   RefreshCw,
   Check,
   SwitchCamera,
@@ -11,20 +12,23 @@ import {
   ChevronDown,
   Scan,
   Video,
-  Square,
   Image as ImageIcon,
-  IdCard,
-  FileText,
   Save,
+  Zap,
+  ZapOff,
+  Grid3x3,
+  ScanLine,
+  Settings,
 } from 'lucide-react'
 import { ToolShell, ErrorBanner } from '../components/ToolShell'
 import { CornerEditor, defaultCorners } from '../components/CornerEditor'
 import { LiveOutline } from '../components/LiveOutline'
 import { PageEditorModal } from '../components/PageEditorModal'
 import { useCamera } from '../lib/useCamera'
+import { useContainedVideoRect } from '../lib/useContainedVideoRect'
 import { useAutoScanSession, type AutoScanStatus } from '../lib/useAutoScanSession'
 import { processScan, detectCorners } from '../lib/scanProcessorClient'
-import { imageDataToDataUrl, dataUrlToBytes } from '../lib/imageDataUtils'
+import { imageDataToDataUrl, dataUrlToBytes, fileToCaptureResult } from '../lib/imageDataUtils'
 import { imagesToPdf } from '../lib/pdfEngine'
 import { downloadBlob, bytesToBlob } from '../lib/download'
 import { stitchLongImage } from '../lib/longImage'
@@ -68,7 +72,12 @@ const ENHANCE_MODES = ENHANCE_MODE_OPTIONS
 export default function ScannerPage() {
   const navigate = useNavigate()
   const camera = useCamera()
-  const [step, setStep] = useState<'camera' | 'crop' | 'recording'>('camera')
+  const [step, setStep] = useState<'camera' | 'crop' | 'recording' | 'idle'>('camera')
+  const [showGrid, setShowGrid] = useState(false)
+  const [showQuickSettings, setShowQuickSettings] = useState(false)
+  const importInputRef = useRef<HTMLInputElement>(null)
+  const videoContainerRef = useRef<HTMLDivElement>(null)
+  const videoRect = useContainedVideoRect(camera.videoRef, videoContainerRef)
   const [capture, setCapture] = useState<Capture | null>(null)
   const [corners, setCorners] = useState<[Point, Point, Point, Point] | null>(null)
   const [enhance, setEnhance] = useState<EnhanceOptions>(defaultEnhanceOptions)
@@ -98,6 +107,7 @@ export default function ScannerPage() {
 
   useEffect(() => {
     if (step === 'camera' || step === 'recording') camera.start()
+    if (step === 'idle') camera.stop()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step])
 
@@ -110,6 +120,14 @@ export default function ScannerPage() {
   function handleStopRecording() {
     autoScan.stop()
     setStep('camera')
+  }
+
+  function handleCloseCamera() {
+    if (pages.length > 0 && !confirm(`Exit the camera? ${pages.length} scanned page${pages.length === 1 ? '' : 's'} will stay below.`)) {
+      return
+    }
+    if (step === 'recording') autoScan.stop()
+    setStep('idle')
   }
 
   useEffect(() => {
@@ -131,21 +149,38 @@ export default function ScannerPage() {
     }
   }, [step, capture, corners, enhance])
 
+  function processCaptureResult(result: Capture) {
+    setError(null)
+    setCapture(result)
+    setCorners(defaultCorners(result.imageData.width, result.imageData.height))
+    setEnhance(recordEnhance)
+    setPreviewUrl(null)
+    setPreviewBaseUrl(null)
+    setAutoDetected(null)
+    camera.stop()
+    setStep('crop')
+    runDetection(result.imageData)
+  }
+
   function handleCapture() {
     const result = camera.capture()
     if (!result) {
       setError('Could not capture from the camera. Try again.')
       return
     }
-    setError(null)
-    setCapture(result)
-    setCorners(defaultCorners(result.imageData.width, result.imageData.height))
-    setEnhance(defaultEnhanceOptions)
-    setPreviewUrl(null)
-    setAutoDetected(null)
-    camera.stop()
-    setStep('crop')
-    runDetection(result.imageData)
+    processCaptureResult(result)
+  }
+
+  async function handleImportFile(e: ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    try {
+      const result = await fileToCaptureResult(file)
+      processCaptureResult(result)
+    } catch {
+      setError('Could not read that image file.')
+    }
   }
 
   const ID_CARD_ENHANCE: EnhanceOptions = { mode: 'original', brightness: 0, contrast: 0, bwThreshold: 150 }
@@ -287,146 +322,218 @@ export default function ScannerPage() {
   }
 
   return (
-    <ToolShell title="Scan Document" description="Capture pages with your camera, straighten and clean them up, then export a PDF — all on this device.">
-      {error && <ErrorBanner message={error} />}
-
-      {step === 'camera' && (
-        <div className="scanner-camera">
-          {camera.status === 'requesting' && <p className="tool-hint">Requesting camera access…</p>}
-          {camera.status === 'denied' && (
-            <div className="tool-section">
-              <p className="tool-hint">Camera access was denied. Allow camera access in your browser settings, then try again.</p>
-              <button className="btn" onClick={() => camera.start()}>
-                <RefreshCw size={14} /> Try again
+    <>
+      {(step === 'camera' || step === 'recording') && (
+        <div className="scanner-fullscreen">
+          <div className="scanner-fs-topbar">
+            <button className="scanner-fs-icon-btn" onClick={step === 'recording' ? handleStopRecording : handleCloseCamera} aria-label="Close">
+              <X size={20} />
+            </button>
+            <div className="scanner-fs-topbar__right">
+              {camera.canToggleTorch && (
+                <button
+                  className={`scanner-fs-icon-btn${camera.torchOn ? ' scanner-fs-icon-btn--active' : ''}`}
+                  onClick={camera.toggleTorch}
+                  aria-label="Toggle flash"
+                >
+                  {camera.torchOn ? <Zap size={18} /> : <ZapOff size={18} />}
+                </button>
+              )}
+              <button
+                className={`scanner-fs-icon-btn${showGrid ? ' scanner-fs-icon-btn--active' : ''}`}
+                onClick={() => setShowGrid((g) => !g)}
+                aria-label="Toggle grid"
+              >
+                <Grid3x3 size={18} />
+              </button>
+              {camera.canSwitchCamera && (
+                <button className="scanner-fs-icon-btn" onClick={camera.switchCamera} aria-label="Switch camera">
+                  <SwitchCamera size={18} />
+                </button>
+              )}
+              <button
+                className={`scanner-fs-icon-btn${showQuickSettings ? ' scanner-fs-icon-btn--active' : ''}`}
+                onClick={() => setShowQuickSettings((s) => !s)}
+                aria-label="Enhancement settings"
+              >
+                <Settings size={18} />
               </button>
             </div>
-          )}
-          {camera.status === 'unavailable' && (
-            <p className="tool-hint">No camera is available on this device or browser. You can still use Images to PDF instead.</p>
+          </div>
+
+          {showQuickSettings && (
+            <div className="scanner-fs-quick-settings">
+              {ENHANCE_MODES.map((m) => (
+                <button
+                  key={m.value}
+                  className={`scanner-fs-quick-settings__item${recordEnhance.mode === m.value ? ' scanner-fs-quick-settings__item--active' : ''}`}
+                  onClick={() => setRecordEnhance((prev) => ({ ...prev, mode: m.value }))}
+                >
+                  {m.label}
+                </button>
+              ))}
+            </div>
           )}
 
-          <div className="scanner-camera__viewport" style={{ display: camera.status === 'ready' ? 'block' : 'none' }}>
-            <video ref={camera.videoRef} muted playsInline className="scanner-camera__video" />
-            {camera.canSwitchCamera && (
-              <button className="scanner-viewport-icon-btn scanner-viewport-icon-btn--top-right" onClick={camera.switchCamera} aria-label="Switch camera">
-                <SwitchCamera size={16} />
-              </button>
+          <div className="scanner-fs-video" ref={videoContainerRef}>
+            {camera.status === 'requesting' && <p className="scanner-fs-message">Requesting camera access…</p>}
+            {camera.status === 'denied' && (
+              <div className="scanner-fs-message">
+                <p>Camera access was denied. Allow camera access in your browser settings, then try again.</p>
+                <button className="btn" onClick={() => camera.start()}>
+                  <RefreshCw size={14} /> Try again
+                </button>
+              </div>
             )}
-            {scanMode === 'id-card' && (
-              <>
-                <div
-                  className="id-card-guide"
-                  style={{ width: `${ID_CARD_GUIDE_WIDTH_PCT}%`, aspectRatio: ID_CARD_ASPECT }}
-                />
-                <div className="scanner-record-status">
-                  {idCardStage === 'front' ? 'Align the FRONT of your ID in the box' : 'Flip the card — align the BACK in the box'}
-                </div>
-              </>
+            {camera.status === 'unavailable' && (
+              <div className="scanner-fs-message">
+                <p>No camera is available on this device or browser.</p>
+                <button className="btn" onClick={() => importInputRef.current?.click()}>
+                  <ImageIcon size={14} /> Import an image instead
+                </button>
+              </div>
+            )}
+
+            <video
+              ref={camera.videoRef}
+              muted
+              playsInline
+              className="scanner-fs-video__el"
+              style={{ display: camera.status === 'ready' ? 'block' : 'none' }}
+            />
+
+            {camera.status === 'ready' && (
+              // Positioned to exactly match the video's visible (letterbox-aware) rectangle, so
+              // every percentage-based overlay below lines up with what's actually being captured.
+              <div
+                className="scanner-fs-video__overlay"
+                style={{ left: `${videoRect.left}%`, top: `${videoRect.top}%`, width: `${videoRect.width}%`, height: `${videoRect.height}%` }}
+              >
+                {showGrid && (
+                  <div className="scanner-fs-grid" aria-hidden="true">
+                    <span />
+                    <span />
+                    <span />
+                  </div>
+                )}
+
+                {step === 'recording' && (
+                  <>
+                    <LiveOutline
+                      corners={autoScan.liveCorners}
+                      frameSize={autoScan.liveFrameSize}
+                      locked={autoScan.status === 'stabilizing' || autoScan.status === 'capturing'}
+                    />
+                    <div className="scanner-record-badge">
+                      <span className="scanner-record-dot" /> REC
+                    </div>
+                    <div className={`scanner-record-status scanner-record-status--${autoScan.status}`}>
+                      {AUTO_SCAN_STATUS_LABEL[autoScan.status]}
+                    </div>
+                  </>
+                )}
+
+                {step === 'camera' && scanMode === 'id-card' && (
+                  <>
+                    <div
+                      className="id-card-guide"
+                      style={{ width: `${ID_CARD_GUIDE_WIDTH_PCT}%`, aspectRatio: ID_CARD_ASPECT }}
+                    />
+                    <div className="scanner-record-status">
+                      {idCardStage === 'front' ? 'Align the FRONT of your ID in the box' : 'Flip the card — align the BACK in the box'}
+                    </div>
+                  </>
+                )}
+              </div>
             )}
           </div>
 
-          {camera.status === 'ready' && (
-            <div className="scanner-mode-tabs">
+          {step === 'camera' && camera.status === 'ready' && (
+            <div className="scanner-fs-tabs">
               <button
-                className={`scanner-mode-tab${scanMode === 'document' ? ' scanner-mode-tab--active' : ''}`}
+                className={`scanner-fs-tab${scanMode === 'document' ? ' scanner-fs-tab--active' : ''}`}
                 onClick={() => setScanMode('document')}
               >
-                <FileText size={14} /> Document
+                Document
+              </button>
+              <button className="scanner-fs-tab" onClick={handleStartRecording}>
+                Auto-Scan
               </button>
               <button
-                className={`scanner-mode-tab${scanMode === 'id-card' ? ' scanner-mode-tab--active' : ''}`}
+                className={`scanner-fs-tab${scanMode === 'id-card' ? ' scanner-fs-tab--active' : ''}`}
                 onClick={() => {
                   setScanMode('id-card')
                   setIdCardStage('front')
                   setIdFrontDataUrl(null)
                 }}
               >
-                <IdCard size={14} /> ID Card
+                ID Card
               </button>
             </div>
           )}
 
-          {camera.status === 'ready' && scanMode === 'document' && (
-            <div className="scanner-capture-bar">
-              <button className="scanner-capture-bar__side" onClick={handleStartRecording} aria-label="Record and auto-scan">
-                <Video size={18} />
-                <span>Auto</span>
+          {step === 'camera' && camera.status === 'ready' && scanMode === 'document' && (
+            <div className="scanner-fs-bottombar">
+              <button className="scanner-fs-side" onClick={handleCloseCamera} aria-label="Close">
+                <X size={20} />
               </button>
-              <button className="scanner-capture-bar__shutter" onClick={handleCapture} aria-label="Capture page">
-                <span className="scanner-capture-bar__shutter-inner" />
+              <button className="scanner-fs-shutter" onClick={handleCapture} aria-label="Capture page">
+                <span className="scanner-fs-shutter__inner" />
               </button>
-              <div className="scanner-capture-bar__side scanner-capture-bar__side--badge">
-                <span className="scanner-pages-badge">{pages.length}</span>
-                <span>Pages</span>
-              </div>
+              <button className="scanner-fs-side" onClick={() => importInputRef.current?.click()} aria-label="Import image">
+                <ImageIcon size={20} />
+                <span>Import</span>
+              </button>
             </div>
           )}
 
-          {camera.status === 'ready' && scanMode === 'id-card' && (
-            <div className="scanner-capture-bar">
-              <button
-                className="scanner-capture-bar__side"
-                onClick={handleRetakeIdFront}
-                disabled={idCardStage === 'front'}
-                aria-label="Retake front"
-              >
-                <RefreshCw size={18} />
+          {step === 'camera' && camera.status === 'ready' && scanMode === 'id-card' && (
+            <div className="scanner-fs-bottombar">
+              <button className="scanner-fs-side" onClick={handleCloseCamera} aria-label="Close">
+                <X size={20} />
+              </button>
+              <button className="scanner-fs-shutter" onClick={handleIdCardCapture} disabled={isProcessing} aria-label="Capture">
+                {isProcessing ? <span className="spinner" /> : <span className="scanner-fs-shutter__inner" />}
+              </button>
+              <button className="scanner-fs-side" onClick={handleRetakeIdFront} disabled={idCardStage === 'front'} aria-label="Retake front">
+                <RefreshCw size={20} />
                 <span>Retake</span>
               </button>
-              <button className="scanner-capture-bar__shutter" onClick={handleIdCardCapture} disabled={isProcessing} aria-label="Capture">
-                {isProcessing ? <span className="spinner" /> : <span className="scanner-capture-bar__shutter-inner" />}
+            </div>
+          )}
+
+          {step === 'recording' && (
+            <div className="scanner-fs-bottombar">
+              <button className="scanner-fs-side" onClick={handleStopRecording} aria-label="Stop recording">
+                <X size={20} />
+                <span>Stop</span>
               </button>
-              <div className="scanner-capture-bar__side scanner-capture-bar__side--badge">
-                <span className="scanner-pages-badge">{pages.length}</span>
+              <div className="scanner-fs-shutter scanner-fs-shutter--rec" aria-hidden="true">
+                <Video size={22} />
+              </div>
+              <div className="scanner-fs-side scanner-fs-side--badge">
+                <span className="scanner-pages-badge">{autoScan.capturedCount}</span>
                 <span>Pages</span>
               </div>
             </div>
           )}
+
+          <input ref={importInputRef} type="file" accept="image/*" className="visually-hidden" onChange={handleImportFile} />
         </div>
       )}
 
-      {step === 'recording' && (
-        <div className="scanner-camera">
-          <div className="scanner-camera__viewport scanner-camera__viewport--recording">
-            <video ref={camera.videoRef} muted playsInline className="scanner-camera__video" />
-            <LiveOutline
-              corners={autoScan.liveCorners}
-              frameSize={autoScan.liveFrameSize}
-              locked={autoScan.status === 'stabilizing' || autoScan.status === 'capturing'}
-            />
-            <div className="scanner-record-badge">
-              <span className="scanner-record-dot" /> REC
-            </div>
-            <div className={`scanner-record-status scanner-record-status--${autoScan.status}`}>
-              {AUTO_SCAN_STATUS_LABEL[autoScan.status]}
-            </div>
-          </div>
+      <ToolShell title="Scan Document" description="Capture pages with your camera, straighten and clean them up, then export a PDF — all on this device.">
+        {error && <ErrorBanner message={error} />}
 
-          <div className="tool-actions">
-            <span className="tool-hint">{autoScan.capturedCount} page{autoScan.capturedCount === 1 ? '' : 's'} captured this session</span>
-          </div>
-
-          <div className="tool-section">
-            <label className="tool-field">
-              <span>Enhancement</span>
-              <select
-                value={recordEnhance.mode}
-                onChange={(e) => setRecordEnhance((prev) => ({ ...prev, mode: e.target.value as EnhanceMode }))}
-              >
-                {ENHANCE_MODES.map((m) => (
-                  <option key={m.value} value={m.value}>{m.label}</option>
-                ))}
-              </select>
-            </label>
-          </div>
-
-          <div className="tool-actions">
-            <button className="btn btn-primary" onClick={handleStopRecording}>
-              <Square size={14} /> Stop recording
+        {step === 'idle' && pages.length === 0 && (
+          <div className="scanner-idle">
+            <ScanLine size={36} strokeWidth={1.25} />
+            <p>Ready to scan a document.</p>
+            <button className="btn btn-primary" onClick={() => setStep('camera')}>
+              <ScanLine size={16} /> Open camera
             </button>
           </div>
-        </div>
-      )}
+        )}
 
       {step === 'crop' && capture && corners && (
         <div className="scanner-crop">
@@ -528,7 +635,7 @@ export default function ScannerPage() {
             ))}
           </div>
           <div className="tool-actions">
-            {step !== 'camera' ? null : (
+            {(step === 'camera' || step === 'recording') ? null : (
               <button className="btn" onClick={() => setStep('camera')}>
                 <Plus size={14} /> Add another page
               </button>
@@ -563,6 +670,7 @@ export default function ScannerPage() {
           />
         )
       })()}
-    </ToolShell>
+      </ToolShell>
+    </>
   )
 }

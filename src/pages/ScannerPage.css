@@ -1,49 +1,36 @@
-.scanner-camera__viewport {
-  position: relative;
-  border-radius: var(--radius-md);
-  overflow: hidden;
-  background: #111;
-}
-
-.scanner-camera__video {
-  width: 100%;
-  display: block;
-  max-height: 70vh;
-}
-
-.scanner-mode-tabs {
+/* Full-screen immersive camera — a fixed overlay covering the header and bottom nav,
+   matching a native camera app rather than living inside the normal page layout. */
+.scanner-fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: #000;
   display: flex;
+  flex-direction: column;
+  color: #fff;
+}
+
+.scanner-fs-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-3) var(--space-4);
+  padding-top: calc(var(--space-3) + env(safe-area-inset-top, 0px));
+  flex-shrink: 0;
+}
+
+.scanner-fs-topbar__right {
+  display: flex;
+  align-items: center;
   gap: var(--space-2);
 }
 
-.scanner-mode-tab {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  padding: 8px;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
-  background: var(--color-surface);
-  font-size: 13px;
-  cursor: pointer;
-  color: var(--color-text-muted);
-}
-
-.scanner-mode-tab--active {
-  background: var(--color-accent-subtle);
-  border-color: var(--color-accent);
-  color: var(--color-accent);
-}
-
-.scanner-viewport-icon-btn {
-  position: absolute;
-  width: 34px;
-  height: 34px;
+.scanner-fs-icon-btn {
+  width: 36px;
+  height: 36px;
   border-radius: 50%;
   border: none;
-  background: rgba(0, 0, 0, 0.5);
+  background: transparent;
   color: #fff;
   display: flex;
   align-items: center;
@@ -51,41 +38,156 @@
   cursor: pointer;
 }
 
-.scanner-viewport-icon-btn--top-right {
-  top: 10px;
-  right: 10px;
+.scanner-fs-icon-btn--active {
+  background: rgba(37, 99, 235, 0.55);
+  color: #fff;
 }
 
-.scanner-capture-bar {
+.scanner-fs-quick-settings {
+  display: flex;
+  gap: var(--space-2);
+  padding: 0 var(--space-4) var(--space-2);
+  flex-wrap: wrap;
+}
+
+.scanner-fs-quick-settings__item {
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+  border-radius: 999px;
+  padding: 5px 12px;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.scanner-fs-quick-settings__item--active {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+}
+
+.scanner-fs-video {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.scanner-fs-video__el {
+  width: 100%;
+  height: 100%;
+  /* `contain`, not `cover` — the on-screen guide overlays (ID card box, live
+     edge outline) are positioned as percentages of the video's own frame, and
+     `cover` would crop the video so those percentages no longer line up with
+     what's actually captured. Letterboxing is invisible against the black
+     fullscreen background anyway. */
+  object-fit: contain;
+}
+
+.scanner-fs-video__overlay {
+  position: absolute;
+  pointer-events: none;
+}
+
+.scanner-fs-message {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+  text-align: center;
+  color: #fff;
+  padding: var(--space-5);
+  max-width: 320px;
+}
+
+.scanner-fs-grid {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+}
+
+.scanner-fs-grid span {
+  border-right: 1px solid rgba(255, 255, 255, 0.3);
+  position: relative;
+}
+
+.scanner-fs-grid span:last-child {
+  border-right: none;
+}
+
+.scanner-fs-grid::before,
+.scanner-fs-grid::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: rgba(255, 255, 255, 0.3);
+}
+
+.scanner-fs-grid::before {
+  top: 33.33%;
+}
+
+.scanner-fs-grid::after {
+  top: 66.66%;
+}
+
+.scanner-fs-tabs {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-5);
+  padding: var(--space-3) var(--space-4);
+  flex-shrink: 0;
+}
+
+.scanner-fs-tab {
+  border: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  padding: 4px 0;
+}
+
+.scanner-fs-tab--active {
+  color: var(--color-accent);
+}
+
+.scanner-fs-bottombar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: var(--space-3) var(--space-5);
+  padding: var(--space-3) var(--space-6);
+  padding-bottom: calc(var(--space-4) + env(safe-area-inset-bottom, 0px));
+  flex-shrink: 0;
 }
 
-.scanner-capture-bar__side {
+.scanner-fs-side {
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 4px;
   border: none;
   background: transparent;
-  color: var(--color-text-muted);
+  color: #fff;
   font-size: 11px;
   cursor: pointer;
   min-width: 56px;
 }
 
-.scanner-capture-bar__side:hover:not(:disabled) {
-  color: var(--color-text);
-}
-
-.scanner-capture-bar__side:disabled {
-  opacity: 0.4;
+.scanner-fs-side:disabled {
+  opacity: 0.35;
   cursor: not-allowed;
 }
 
-.scanner-capture-bar__side--badge {
+.scanner-fs-side--badge {
   cursor: default;
 }
 
@@ -94,8 +196,8 @@
   height: 26px;
   padding: 0 6px;
   border-radius: 13px;
-  background: var(--color-accent-subtle);
-  color: var(--color-accent);
+  background: var(--color-accent);
+  color: #fff;
   font-size: 13px;
   font-weight: 600;
   display: flex;
@@ -103,12 +205,12 @@
   justify-content: center;
 }
 
-.scanner-capture-bar__shutter {
-  width: 64px;
-  height: 64px;
+.scanner-fs-shutter {
+  width: 68px;
+  height: 68px;
   border-radius: 50%;
-  border: 3px solid var(--color-border-strong);
-  background: var(--color-surface);
+  border: 3px solid #fff;
+  background: transparent;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -116,15 +218,22 @@
   flex-shrink: 0;
 }
 
-.scanner-capture-bar__shutter:hover {
-  border-color: var(--color-accent);
+.scanner-fs-shutter:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
-.scanner-capture-bar__shutter-inner {
-  width: 50px;
-  height: 50px;
+.scanner-fs-shutter__inner {
+  width: 56px;
+  height: 56px;
   border-radius: 50%;
-  background: var(--color-accent);
+  background: #fff;
+}
+
+.scanner-fs-shutter--rec {
+  border-color: #ef4444;
+  color: #ef4444;
+  cursor: default;
 }
 
 .id-card-guide {
@@ -197,6 +306,20 @@
 
 .scanner-record-status--blurry {
   background: rgba(217, 119, 6, 0.85);
+}
+
+.scanner-idle {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  text-align: center;
+  padding: var(--space-8) var(--space-4);
+  color: var(--color-text-muted);
+}
+
+.scanner-idle .btn {
+  margin-top: var(--space-2);
 }
 
 .scanner-crop__grid {
