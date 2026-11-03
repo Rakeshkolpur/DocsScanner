@@ -51,7 +51,7 @@ self.onmessage = (event: MessageEvent<ScanRequest>) => {
   let base = warpPerspective(imageData, corners, destWidth, destHeight)
   base = rotateImageData(base, rotationDeg)
   const enhanced = new ImageData(new Uint8ClampedArray(base.data), base.width, base.height)
-  applyEnhancements(enhanced.data, enhance)
+  applyEnhancements(enhanced.data, enhanced.width, enhanced.height, enhance)
 
   const response: ScanProcessResponse = { kind: 'process', id, baseImageData: base, enhancedImageData: enhanced }
   // ImageData's underlying buffers are transferable.

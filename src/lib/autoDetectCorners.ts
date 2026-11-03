@@ -1,28 +1,38 @@
 import type { Point } from './homography'
 
 /**
- * Pure-JS document edge detection (no OpenCV/WASM): downscale, grayscale, blur,
- * Otsu-threshold against the border background, flood-fill the largest region,
- * convex-hull its boundary, then pick the 4 extreme corners. Good enough for a
- * document with reasonable contrast against its background; returns null when
- * no confident quad can be found, so the caller can fall back to manual corners.
+ * Pure-JS document edge detection (no OpenCV/WASM): downscale, grayscale,
+ * blur, compute a Sobel edge map, dilate it to close small gaps along the
+ * page's border, then flood-fill the largest enclosed (non-edge) region that
+ * doesn't touch the frame — that's the page interior. Convex-hull its
+ * boundary, then pick the 4 extreme corners.
+ *
+ * This classifies by *edges*, not by pixel color/threshold — a document with
+ * printed text, photos or colored sections still flood-fills as one region,
+ * because its interior isn't cut off by any single internal edge loop large
+ * enough to fully enclose it before reaching the real page boundary. An
+ * earlier color-threshold version broke on exactly this case (any document
+ * with real content, not just a blank page), since mixed-tone interiors
+ * fragment into disconnected pieces under a single global threshold.
+ *
+ * Returns null when no confident quad can be found, so the caller can fall
+ * back to manual corners rather than apply a wrong crop.
  */
 export function detectDocumentCorners(src: ImageData, maxWorkingDim = 500): [Point, Point, Point, Point] | null {
   const { gray, width, height, scale } = downscaleToGray(src, maxWorkingDim)
-  const blurred = boxBlur(gray, width, height, 2)
-  const threshold = otsuThreshold(blurred)
-  const binary = new Uint8Array(width * height)
-  for (let i = 0; i < blurred.length; i++) binary[i] = blurred[i] > threshold ? 1 : 0
+  const blurred = boxBlur(gray, width, height, 1)
+  const edgeMagnitude = sobelMagnitude(blurred, width, height)
+  const threshold = otsuThreshold(edgeMagnitude)
+  const edges = new Uint8Array(width * height)
+  for (let i = 0; i < edgeMagnitude.length; i++) edges[i] = edgeMagnitude[i] > threshold ? 1 : 0
 
-  const backgroundValue = dominantBorderValue(binary, width, height)
-  const documentValue = backgroundValue === 1 ? 0 : 1
-
-  const component = floodFillLargestComponent(binary, width, height, documentValue)
+  const dilated = dilateBinary(edges, width, height, 2)
+  const component = floodFillLargestInteriorComponent(dilated, width, height)
   if (!component) return null
 
   const totalPixels = width * height
   const coverage = component.size / totalPixels
-  if (coverage < 0.12 || coverage > 0.95) {
+  if (coverage < 0.1 || coverage > 0.95) {
     // Too small to be a confident document, or too large to distinguish from the background.
     return null
   }
@@ -108,12 +118,75 @@ function clampIndex(i: number, max: number): number {
   return i < 0 ? 0 : i >= max ? max - 1 : i
 }
 
-/** Otsu's method: finds the threshold minimizing within-class variance from the grayscale histogram. */
-function otsuThreshold(gray: Uint8ClampedArray): number {
-  const histogram = new Array(256).fill(0)
-  for (let i = 0; i < gray.length; i++) histogram[gray[i]]++
+/** 3x3 Sobel gradient magnitude, scaled down (÷4) and clamped to 0..255 so it can share the Otsu histogram helper. */
+function sobelMagnitude(gray: Uint8ClampedArray, width: number, height: number): Uint8ClampedArray {
+  const out = new Uint8ClampedArray(width * height)
 
-  const total = gray.length
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const x0 = clampIndex(x - 1, width)
+      const x1 = clampIndex(x + 1, width)
+      const y0 = clampIndex(y - 1, height)
+      const y1 = clampIndex(y + 1, height)
+
+      const tl = gray[y0 * width + x0]
+      const tc = gray[y0 * width + x]
+      const tr = gray[y0 * width + x1]
+      const ml = gray[y * width + x0]
+      const mr = gray[y * width + x1]
+      const bl = gray[y1 * width + x0]
+      const bc = gray[y1 * width + x]
+      const br = gray[y1 * width + x1]
+
+      const gx = tr + 2 * mr + br - tl - 2 * ml - bl
+      const gy = bl + 2 * bc + br - tl - 2 * tc - tr
+      const magnitude = Math.sqrt(gx * gx + gy * gy) / 4
+      out[y * width + x] = magnitude
+    }
+  }
+
+  return out
+}
+
+/** Binary dilation (expands 1s) with a square structuring element, via separable max-filter passes. */
+function dilateBinary(binary: Uint8Array, width: number, height: number, radius: number): Uint8Array {
+  const horizontal = new Uint8Array(width * height)
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      let m = 0
+      for (let dx = -radius; dx <= radius; dx++) {
+        if (binary[y * width + clampIndex(x + dx, width)]) {
+          m = 1
+          break
+        }
+      }
+      horizontal[y * width + x] = m
+    }
+  }
+
+  const out = new Uint8Array(width * height)
+  for (let x = 0; x < width; x++) {
+    for (let y = 0; y < height; y++) {
+      let m = 0
+      for (let dy = -radius; dy <= radius; dy++) {
+        if (horizontal[clampIndex(y + dy, height) * width + x]) {
+          m = 1
+          break
+        }
+      }
+      out[y * width + x] = m
+    }
+  }
+
+  return out
+}
+
+/** Otsu's method: finds the threshold minimizing within-class variance from the (0-255) histogram. */
+function otsuThreshold(values: Uint8ClampedArray): number {
+  const histogram = new Array(256).fill(0)
+  for (let i = 0; i < values.length; i++) histogram[values[i]]++
+
+  const total = values.length
   let sum = 0
   for (let t = 0; t < 256; t++) sum += t * histogram[t]
 
@@ -142,37 +215,25 @@ function otsuThreshold(gray: Uint8ClampedArray): number {
   return threshold
 }
 
-/** Whichever binary value (0 or 1) is more common along the image border is treated as background. */
-function dominantBorderValue(binary: Uint8Array, width: number, height: number): 0 | 1 {
-  let ones = 0
-  let total = 0
-  for (let x = 0; x < width; x++) {
-    ones += binary[x]
-    ones += binary[(height - 1) * width + x]
-    total += 2
-  }
-  for (let y = 0; y < height; y++) {
-    ones += binary[y * width]
-    ones += binary[y * width + width - 1]
-    total += 2
-  }
-  return ones / total > 0.5 ? 1 : 0
-}
-
 interface Component {
   size: number
   boundary: Point[]
 }
 
-/** Iterative BFS flood fill (no recursion, avoids stack overflow on large images) for the largest region of `value`. */
-function floodFillLargestComponent(binary: Uint8Array, width: number, height: number, value: 0 | 1): Component | null {
+/**
+ * Iterative BFS flood fill (no recursion) over every connected region of
+ * non-edge (0) pixels in a dilated edge map. Returns the largest region that
+ * does NOT touch the image's outer border — a region touching the border is
+ * either the area outside the page, or signals the page's edge loop wasn't
+ * fully closed (a gap let the fill leak out), so it's disqualified either way.
+ */
+function floodFillLargestInteriorComponent(edges: Uint8Array, width: number, height: number): Component | null {
   const visited = new Uint8Array(width * height)
   let best: Component | null = null
-
   const queue = new Int32Array(width * height)
 
-  for (let start = 0; start < binary.length; start++) {
-    if (binary[start] !== value || visited[start]) continue
+  for (let start = 0; start < edges.length; start++) {
+    if (edges[start] !== 0 || visited[start]) continue
 
     let head = 0
     let tail = 0
@@ -180,6 +241,7 @@ function floodFillLargestComponent(binary: Uint8Array, width: number, height: nu
     visited[start] = 1
     const boundary: Point[] = []
     let size = 0
+    let touchesImageBorder = false
 
     while (head < tail) {
       const idx = queue[head++]
@@ -187,7 +249,8 @@ function floodFillLargestComponent(binary: Uint8Array, width: number, height: nu
       const x = idx % width
       const y = (idx / width) | 0
 
-      let isBoundary = x === 0 || y === 0 || x === width - 1 || y === height - 1
+      let isRegionBoundary = x === 0 || y === 0 || x === width - 1 || y === height - 1
+      if (isRegionBoundary) touchesImageBorder = true
 
       const neighbors = [
         [x - 1, y],
@@ -198,8 +261,8 @@ function floodFillLargestComponent(binary: Uint8Array, width: number, height: nu
       for (const [nx, ny] of neighbors) {
         if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue
         const nIdx = ny * width + nx
-        if (binary[nIdx] !== value) {
-          isBoundary = true
+        if (edges[nIdx] !== 0) {
+          isRegionBoundary = true
           continue
         }
         if (!visited[nIdx]) {
@@ -208,10 +271,10 @@ function floodFillLargestComponent(binary: Uint8Array, width: number, height: nu
         }
       }
 
-      if (isBoundary) boundary.push({ x, y })
+      if (isRegionBoundary) boundary.push({ x, y })
     }
 
-    if (!best || size > best.size) {
+    if (!touchesImageBorder && (!best || size > best.size)) {
       best = { size, boundary }
     }
   }

@@ -25,10 +25,24 @@ export function useCamera() {
     setStatus('requesting')
     stop()
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: mode, width: { ideal: 1920 }, height: { ideal: 1080 } },
-        audio: false,
-      })
+      // Ask for the largest frame the device will give us — sharper source material
+      // makes a real difference in scan quality, far more than any post-processing can
+      // recover. `focusMode: continuous` is best-effort: unsupported browsers/devices
+      // just ignore it rather than failing the constraint, but try without it too in
+      // case a stricter implementation disagrees.
+      const videoConstraints: MediaTrackConstraints = {
+        facingMode: mode,
+        width: { ideal: 3840 },
+        height: { ideal: 3840 },
+        advanced: [{ focusMode: 'continuous' } as MediaTrackConstraintSet],
+      }
+      let stream: MediaStream
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ video: videoConstraints, audio: false })
+      } catch {
+        const { advanced: _advanced, ...fallbackConstraints } = videoConstraints
+        stream = await navigator.mediaDevices.getUserMedia({ video: fallbackConstraints, audio: false })
+      }
       streamRef.current = stream
       if (videoRef.current) {
         videoRef.current.srcObject = stream

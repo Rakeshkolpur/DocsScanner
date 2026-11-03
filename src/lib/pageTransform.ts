@@ -30,6 +30,6 @@ export async function rotateBaseImage(baseDataUrl: string, degreesCW: 90 | 180 |
 /** Renders the enhanced preview fresh from the plain base image (never cumulative). */
 export async function renderEnhanced(baseDataUrl: string, enhance: EnhanceOptions): Promise<string> {
   const data = await imageUrlToImageData(baseDataUrl)
-  applyEnhancements(data.data, enhance)
+  applyEnhancements(data.data, data.width, data.height, enhance)
   return imageDataToDataUrl(data)
 }
